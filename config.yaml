@@ -1,0 +1,134 @@
+project:
+  name: DigitalDivide
+  root: /workspace
+ookla:
+  s3_bucket: ookla-open-data
+  s3_region: us-west-2
+  type: fixed
+  year: 2023
+  quarter: 2
+  local_dir: data/ookla
+  min_tests: 1
+  max_latency_ms: 1000
+  # Optional tile bounding box [min_lat, max_lat, min_lon, max_lon]; null keeps all
+  # global tiles. Regional scope below covers the modeled IL/WV/GA tracts; widen to
+  # [24.0, 50.0, -125.0, -66.0] for the contiguous United States.
+  bbox: [30.0, 43.0, -92.0, -77.0]
+census:
+  year: 2022
+  api_key: ""
+  local_dir: data/census
+  tables: [B28002, B19013, B15003]
+  tract_url: https://www2.census.gov/geo/tiger/TIGER2022/TRACT/
+  # Optional list of state FIPS codes restricting modeled tracts (IL=17, WV=54,
+  # GA=13). Remove or set to null for all states.
+  states: ["17", "54", "13"]
+hdfs:
+  namenode: hdfs://localhost:9000
+  base_path: /user/digitaldivide
+mongodb:
+  uri: mongodb://admin:secret@localhost:27017/?authSource=admin
+  database: digital_divide
+  collection: clusters
+# One shared pipeline schema, three geographic tiers. Each stage accepts
+# --region <us|india|world> and reads its inputs and outputs from this section.
+regions:
+  us:
+    label: United States (census tracts)
+    level: tract
+    boundary: data/census/boundaries/tl_2022_us_tract.shp
+    id_column: GEOID
+    id_width: 11
+    # Optional boundary attribute filter (US region-first scope).
+    boundary_filter:
+      column: STATEFP
+      values: ["17", "54", "13"]
+    join_fields:
+      parent_1: STATEFP
+      parent_2: COUNTYFP
+      region_name: NAMELSAD
+    # null falls back to ookla.bbox above.
+    bbox: null
+    socio: data/census/acs5_tract_2022.parquet
+    socio_id: tract_id
+    socio_features: [broadband_adoption_pct, median_income, education_bachelors_pct]
+    adoption_feature: broadband_adoption_pct
+    income_feature: median_income
+    model_features: [avg_download_mbps, avg_upload_mbps, avg_latency_ms,
+                     broadband_adoption_pct, median_income, education_bachelors_pct]
+    mongo_collection: clusters
+    geojson: data/processed/clusters.geojson
+    metrics: data/processed/model_metrics.json
+    plot: data/processed/plots/kmeans_evaluation.png
+    simplify_tolerance: 0.001
+    hdfs:
+      clean_tiles: processed/clean_tiles
+      joined: processed/tiles_with_tract
+      features: processed/tract_features
+      clusters: processed/clustered_tracts
+  india:
+    label: India (districts)
+    level: district
+    boundary: data/india/geoBoundaries-IND-ADM2-enriched.geojson
+    id_column: shapeID
+    id_width: 0
+    join_fields:
+      parent_1: state_name
+      region_name: shapeName
+    bbox: [6.5, 37.5, 68.0, 97.5]
+    # NFHS-5 internet-use and literacy are state-level; the ingest broadcasts
+    # them to each district and records the parent state.
+    socio: data/india/nfhs5_district_socio.parquet
+    socio_id: region_id
+    socio_features: [internet_use_pct, literacy_pct]
+    adoption_feature: internet_use_pct
+    income_feature: literacy_pct
+    model_features: [avg_download_mbps, avg_upload_mbps, avg_latency_ms,
+                     internet_use_pct, literacy_pct]
+    mongo_collection: clusters_india
+    geojson: data/processed/clusters_india.geojson
+    metrics: data/processed/model_metrics_india.json
+    plot: data/processed/plots/kmeans_evaluation_india.png
+    simplify_tolerance: 0.001
+    hdfs:
+      clean_tiles: processed/india/clean_tiles
+      joined: processed/india/tiles_with_district
+      features: processed/india/district_features
+      clusters: processed/india/clustered_districts
+  world:
+    label: World (countries)
+    level: country
+    boundary: data/world/ne_110m_admin_0_countries.shp
+    id_column: ADM0_A3
+    id_width: 0
+    join_fields:
+      parent_1: CONTINENT
+      region_name: ADMIN
+    bbox: null
+    socio: data/world/worldbank_indicators.parquet
+    socio_id: region_id
+    socio_features: [internet_users_pct, gdp_per_capita, population]
+    adoption_feature: internet_users_pct
+    income_feature: gdp_per_capita
+    model_features: [avg_download_mbps, avg_upload_mbps, avg_latency_ms,
+                     internet_users_pct, gdp_per_capita]
+    mongo_collection: clusters_world
+    geojson: data/processed/clusters_world.geojson
+    metrics: data/processed/model_metrics_world.json
+    plot: data/processed/plots/kmeans_evaluation_world.png
+    simplify_tolerance: 0.0
+    hdfs:
+      clean_tiles: processed/world/clean_tiles
+      joined: processed/world/tiles_with_country
+      features: processed/world/country_features
+      clusters: processed/world/clustered_countries
+spark:
+  # Limit local Python worker copies during the large tract-geometry join.
+  master: "local[2]"
+  driver_memory: 4g
+  app_name: DigitalDivide
+  shuffle_partitions: 200
+model:
+  k_min: 3
+  k_max: 8
+  silhouette_sample_size: 20000

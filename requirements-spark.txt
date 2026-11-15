@@ -1,0 +1,11 @@
+# Runtime dependencies for apache/spark:3.5.0-python3 (Python 3.8).
+# Keep these separate from the host requirements, which target Python 3.11.
+numpy>=1.24,<1.25
+pandas>=2.0,<2.1
+pymongo>=4.6,<5
+geopandas>=0.13,<0.14
+# GeoPandas 0.13 uses fiona.path from Fiona's top-level namespace.
+fiona>=1.9,<1.10
+shapely>=2.0,<2.1
+pyyaml>=6.0,<7
+matplotlib>=3.7,<3.8
