@@ -1,0 +1,98 @@
+services:
+  namenode:
+    build:
+      context: ..
+      dockerfile: docker/hadoop/Dockerfile
+    image: digitaldivide-hadoop-namenode:3.2.1
+    container_name: digitaldivide-namenode
+    environment:
+      CLUSTER_NAME: digitaldivide
+      CORE_CONF_fs_defaultFS: hdfs://namenode:8020
+      HDFS_CONF_dfs_replication: "1"
+      HDFS_CONF_dfs_namenode_datanode_registration_ip___hostname___check: "false"
+    ports:
+      - "9870:9870"
+      - "9000:8020"
+    volumes:
+      - namenode_data:/hadoop/dfs/name
+    healthcheck:
+      test: ["CMD-SHELL", "hdfs dfsadmin -safemode get | grep -q 'Safe mode is OFF'"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+
+  datanode:
+    image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
+    container_name: digitaldivide-datanode
+    depends_on:
+      namenode:
+        # NameNode health waits for DataNode block reports when HDFS data
+        # volumes already contain blocks. Wait for the process, not health,
+        # so the DataNode can report those blocks and let safe mode end.
+        condition: service_started
+    environment:
+      SERVICE_PRECONDITION: namenode:9870
+      CORE_CONF_fs_defaultFS: hdfs://namenode:8020
+      HDFS_CONF_dfs_replication: "1"
+      HDFS_CONF_dfs_datanode_hostname: datanode
+      HDFS_CONF_dfs_client_use_datanode_hostname: "true"
+    ports:
+      - "9864:9864"
+    volumes:
+      - datanode_data:/hadoop/dfs/data
+    healthcheck:
+      test: ["CMD-SHELL", "hdfs dfsadmin -report | grep -q 'Live datanodes (1)'"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+
+  mongo:
+    image: mongo:7.0
+    container_name: digitaldivide-mongo
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: secret
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "mongosh --quiet --username \"$${MONGO_INITDB_ROOT_USERNAME}\" --password \"$${MONGO_INITDB_ROOT_PASSWORD}\" --authenticationDatabase admin --eval 'db.adminCommand({ ping: 1 }).ok' | grep -q 1"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  spark:
+    build:
+      context: ..
+      dockerfile: docker/spark/Dockerfile
+    image: digitaldivide-spark:3.5.0
+    container_name: digitaldivide-spark
+    depends_on:
+      namenode:
+        condition: service_healthy
+      datanode:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+    environment:
+      PYTHONPATH: /workspace
+      HADOOP_CONF_DIR: /opt/hadoop/etc/hadoop
+      DIGITAL_DIVIDE_HDFS__NAMENODE: hdfs://namenode:8020
+      DIGITAL_DIVIDE_MONGODB__URI: mongodb://admin:secret@mongo:27017/?authSource=admin
+    volumes:
+      - ..:/workspace
+    working_dir: /workspace
+    command: ["bash", "-lc", "sleep infinity"]
+    healthcheck:
+      test: ["CMD-SHELL", "spark-submit --version >/dev/null 2>&1 && hdfs dfs -ls / >/dev/null 2>&1"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+
+volumes:
+  namenode_data:
+  datanode_data:
+  mongo_data:
